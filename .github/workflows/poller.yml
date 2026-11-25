@@ -1,0 +1,44 @@
+name: Always-Free Capacity Poller
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+concurrency:
+  group: oci-arm-poller
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -q oci requests
+      - name: Configure Encrypted Credentials
+        run: |
+          mkdir -p ~/.oci ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_CONFIG }}" > ~/.oci/config
+          printf '%s\n' "${{ secrets.OCI_API_KEY }}" > ~/.oci/oci_api_key.pem
+          printf '%s\n' "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_oci.pub
+          chmod 600 ~/.oci/oci_api_key.pem ~/.oci/config
+      - name: Run Quiet Poller (95-130s Interval)
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: python -u poller.py
+      - name: Auto-Relay Next Run
+        if: always()
+        run: |
+          if [ ! -f "/tmp/provisioned.done" ]; then
+            sleep 10
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/poller.yml/dispatches" \
+              -d '{"ref":"main"}'
+          fi
